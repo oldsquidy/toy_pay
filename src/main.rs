@@ -22,6 +22,7 @@ use std::error::Error;
 use std::{io, process};
 
 use std::ffi::OsString;
+
 mod transaction;
 
 /// run starts the main functionality of the toy_pay app
@@ -30,7 +31,7 @@ mod transaction;
 /// processing each row into the relevant accounts
 fn run() -> Result<(), Box<dyn Error>> {
     // Create an empty hashmap to store the accounts in
-    let mut accounts: HashMap<u16, transaction::Account> = HashMap::new();
+    let mut live_accounts = transaction::AccountRegistry::new();
 
     // Read the input provided via command line argument
     let input_file = get_input_file()?;
@@ -44,30 +45,10 @@ fn run() -> Result<(), Box<dyn Error>> {
         let record: transaction::Record = result?.deserialize(None)?;
 
         // Check to see if we already have the specified account, creating one if not
-        let account = match accounts.entry(record.client) {
-            Entry::Occupied(acc) => acc.into_mut(),
-            Entry::Vacant(acc) => {
-                let new_account = transaction::new_account(record.client);
-                acc.insert(new_account)
-            }
-        };
-        // Process the record into the relevent account
-        account.process_transaction(record);
+        live_accounts.process_record(record);
     }
     // Output the found accounts
-    output_accounts(accounts)
-}
-
-// output_accounts will serealize the populated accounts into a CSV format
-// before outputing them to stdout
-fn output_accounts(accounts: HashMap<u16, transaction::Account>) -> Result<(), Box<dyn Error>> {
-    let mut wtr = csv::Writer::from_writer(io::stdout());
-
-    for account in accounts.values() {
-        wtr.serialize(account)?;
-    }
-    wtr.flush()?;
-    Ok(())
+    live_accounts.output_records()
 }
 
 // get_input_file checks we have been provided with enough command line

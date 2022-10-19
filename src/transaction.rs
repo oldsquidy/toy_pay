@@ -1,28 +1,81 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::io;
+use std::error::Error;
 
 #[derive(Debug, Deserialize)]
 pub struct Record {
     r#type: String,
     pub client: u16,
     tx: u32,
-    amount: Option<f32>,
+    amount: Option<f64>,
+    frozen: bool,
 }
 
+
+
+pub struct AccountRegistry{
+    accounts: HashMap<u16, LiveAccount>
+}
+ 
+impl AccountRegistry{
+    pub fn new() -> AccountRegistry{
+        return AccountRegistry{
+            accounts: HashMap::new()
+        };
+    }
+
+    fn add_account(&mut self, id: u16) -> &LiveAccount{
+        let fresh_account = LiveAccount {
+            transaction_record: HashMap::new(),
+            account_details: AccountDetails {
+               client: id, 
+               available: 0.0,
+               held: 0.0,
+               total: 0.0, 
+               locked: false 
+            }
+       };
+       self.accounts.insert(id, fresh_account);
+       &fresh_account
+    }
+
+    pub fn process_record(&mut self, record: Record){
+        let account = match self.accounts.entry(record.client) {
+            Entry::Occupied(acc) => acc.into_mut(),
+            Entry::Vacant(acc) => self.add_account(record.client),
+        };
+    
+        account.process_transaction(record)
+    }
+
+    pub fn output_records(&self) -> Result<(), Box<dyn Error>> {
+        let mut wtr = csv::Writer::from_writer(io::stdout());
+        for account in self.accounts.values(){
+            wtr.serialize(account)?
+        }
+        wtr.flush()?;
+        Ok(())
+    }
+}
+
+
 #[derive(Debug, Serialize)]
-pub struct Account {
-    #[serde(skip)]
-    transactions: HashMap<u32, Record>,
-    #[serde(skip)]
-    frozen_transactions: HashMap<u32, Record>,
+pub struct LiveAccount {
+    transaction_record: HashMap<u32, Record>,
+    account_details: AccountDetails,
+}
+
+pub struct AccountDetails{
     client: u16,
-    available: f32,
-    held: f32,
-    total: f32,
+    available: f64,
+    held: f64,
+    total: f64,
     locked: bool,
 }
 
-impl Account {
+impl LiveAccount {
     // process_transaction receives a record and calls the relevant function
     // depending on what action is provided in the record
     pub fn process_transaction(&mut self, record: Record) {
