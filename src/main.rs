@@ -29,7 +29,7 @@ mod transaction;
 ///
 /// It will parse the requested csv file into the Record struct
 /// processing each row into the relevant accounts
-fn run() -> Result<(), Box<dyn Error>> {
+fn process_CSV() -> Result<(), Box<dyn Error>> {
     // Create an empty hashmap to store the accounts in
     let mut live_accounts = transaction::AccountRegistry::new();
 
@@ -61,7 +61,7 @@ fn get_input_file() -> Result<OsString, Box<dyn Error>> {
 }
 
 fn main() {
-    if let Err(err) = run() {
+    if let Err(err) = process_CSV() {
         println!("{}", err);
         process::exit(1)
     }

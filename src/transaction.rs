@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::io;
+use std::collections::HashMap;
 use std::error::Error;
+use std::io;
 
 #[derive(Debug, Deserialize)]
 pub struct Record {
@@ -13,66 +13,77 @@ pub struct Record {
     frozen: bool,
 }
 
-
-
-pub struct AccountRegistry{
-    accounts: HashMap<u16, LiveAccount>
+pub struct AccountRegistry {
+    accounts: HashMap<u16, LiveAccount>,
 }
- 
-impl AccountRegistry{
-    pub fn new() -> AccountRegistry{
-        return AccountRegistry{
-            accounts: HashMap::new()
+
+impl AccountRegistry {
+    pub fn new() -> AccountRegistry {
+        return AccountRegistry {
+            accounts: HashMap::new(),
         };
     }
 
-    fn add_account(&mut self, id: u16) -> &LiveAccount{
+    fn add_account(&mut self, id: u16) -> &LiveAccount {
         let fresh_account = LiveAccount {
             transaction_record: HashMap::new(),
             account_details: AccountDetails {
-               client: id, 
-               available: 0.0,
-               held: 0.0,
-               total: 0.0, 
-               locked: false 
-            }
-       };
-       self.accounts.insert(id, fresh_account);
-       &fresh_account
+                client: id,
+                available: 0.0,
+                held: 0.0,
+                total: 0.0,
+                locked: false,
+            },
+        };
+        self.accounts.insert(id, fresh_account);
+        &fresh_account
     }
 
-    pub fn process_record(&mut self, record: Record){
+    pub fn process_record(&mut self, record: Record) {
         let account = match self.accounts.entry(record.client) {
             Entry::Occupied(acc) => acc.into_mut(),
             Entry::Vacant(acc) => self.add_account(record.client),
         };
-    
+
         account.process_transaction(record)
     }
 
     pub fn output_records(&self) -> Result<(), Box<dyn Error>> {
         let mut wtr = csv::Writer::from_writer(io::stdout());
-        for account in self.accounts.values(){
-            wtr.serialize(account)?
+        for account in self.accounts.values() {
+            wtr.serialize(account.account_details)?
         }
         wtr.flush()?;
         Ok(())
     }
 }
 
-
 #[derive(Debug, Serialize)]
-pub struct LiveAccount {
-    transaction_record: HashMap<u32, Record>,
-    account_details: AccountDetails,
-}
-
-pub struct AccountDetails{
+pub struct AccountDetails {
     client: u16,
     available: f64,
     held: f64,
     total: f64,
     locked: bool,
+}
+
+impl AccountDetails {
+    // round_values ensures precision to four decimal places
+    fn round_values(&mut self) {
+        self.held = (self.held * 10000.0).round() / 10000.0;
+        self.total = (self.total * 10000.0).round() / 10000.0;
+        self.available = (self.available * 10000.0).round() / 10000.0;
+    }
+
+    fn recompute_total(&mut self) {
+        self.total = self.available + self.held;
+        self.round_values()
+    }
+}
+
+pub struct LiveAccount {
+    transaction_record: HashMap<u32, Record>,
+    account_details: AccountDetails,
 }
 
 impl LiveAccount {
@@ -88,91 +99,78 @@ impl LiveAccount {
             _ => return,
         };
         // Recompute the total for the account
-        self.total = self.available + self.held;
-        // Round to the required precision
-        self.round_values();
+        self.account_details.recompute_total();
     }
 
     fn deposit(&mut self, record: Record) {
-        if self.locked {
+        if self.account_details.locked {
             return;
         }
         // Increase the available cash
-        self.available += record.amount.unwrap();
+        self.account_details.available += record.amount.unwrap();
         // Add the transaction to the account's transaction list
-        self.transactions.insert(record.tx, record);
+        self.transaction_record.insert(record.tx, record);
     }
     fn withdraw(&mut self, record: Record) {
-        if self.locked {
+        if self.account_details.locked {
             return;
         }
         // Decrease the account's available cash
-        self.available -= record.amount.unwrap();
+        self.account_details.available -= record.amount.unwrap();
         // Add the transaction to the account's transaction list
-        self.transactions.insert(record.tx, record);
+        self.transaction_record.insert(record.tx, record);
     }
     fn dispute(&mut self, record: Record) {
-        if self.locked {
+        if self.account_details.locked {
             return;
         }
         // Remove the disputed transaction from the normal transaction list, if not found
         // then assume an error has occoured and do nothing
-        let transaction_record: Record = match self.transactions.remove(&record.tx) {
+        let record: Record = match self.transaction_record.remove(&record.tx) {
             Some(record) => record,
             None => return,
         };
+        if record.frozen {
+            return;
+        }
         // Decrease the amount of cash from the available pot and add it to the held pot
-        self.available -= transaction_record.amount.unwrap();
-        self.held += transaction_record.amount.unwrap();
-        // Add the transaction in question to the list of frozen transactions
-        self.frozen_transactions
-            .insert(record.tx, transaction_record);
+        self.account_details.available -= record.amount.unwrap();
+        self.account_details.held += record.amount.unwrap();
+        record.frozen = true;
     }
     fn resolve(&mut self, record: Record) {
-        if self.locked {
+        if self.account_details.locked {
             return;
         }
         // Remove the disputed transaction from the frozen transaction list, if not found
         // then assume an error has occoured and do nothing
-        let transaction_record: Record = match self.frozen_transactions.remove(&record.tx) {
+        let transaction: Record = match self.transaction_record.remove(&record.tx) {
             Some(record) => record,
             None => return,
         };
+        if !record.frozen {
+            return;
+        }
+        transaction.frozen = false;
         // Decrease the amount of cash from the held pot and add it to the available pot
-        self.available += transaction_record.amount.unwrap();
-        self.held -= transaction_record.amount.unwrap();
+        self.account_details.available += transaction.amount.unwrap();
+        self.account_details.held -= transaction.amount.unwrap();
         // Add the previously frozen transaction to the normal transaction list
-        self.transactions.insert(record.tx, transaction_record);
     }
     fn chargeback(&mut self, record: Record) {
         // Remove the disputed transaction from the frozen transaction list, if not found
         // then assume an error has occoured and do nothing
-        let transaction_record: &Record = match self.frozen_transactions.get(&record.tx) {
+        let transaction_record: &Record = match self.transaction_record.get(&record.tx) {
             Some(record) => record,
             None => return,
         };
+        if !record.frozen {
+            return;
+        }
         // Remove the amount in question from the held pot
-        self.held -= transaction_record.amount.unwrap();
+        self.account_details.held -= transaction_record.amount.unwrap();
         // Lock the account
-        self.locked = true;
-    }
-    // round_values ensures precision to four decimal places
-    fn round_values(&mut self) {
-        self.held = (self.held * 10000.0).round() / 10000.0;
-        self.total = (self.total * 10000.0).round() / 10000.0;
-        self.available = (self.available * 10000.0).round() / 10000.0;
-    }
-}
-
-pub fn new_account(client: u16) -> Account {
-    Account {
-        transactions: HashMap::new(),
-        frozen_transactions: HashMap::new(),
-        client,
-        available: 0.0,
-        held: 0.0,
-        locked: false,
-        total: 0.0,
+        self.account_details.locked = true;
     }
 }
 
