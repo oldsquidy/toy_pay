@@ -45,7 +45,7 @@ impl AccountRegistry {
             Entry::Vacant(acc) => self.add_account(record.client),
         };
 
-        account.process_transaction(record)
+        account.process_transaction(record);
     }
 
     pub fn output_records(&self) -> Result<(), Box<dyn Error>> {
@@ -107,36 +107,49 @@ impl LiveAccount {
             return;
         }
         // Increase the available cash
-        self.account_details.available += record.amount.unwrap();
+        match record.amount {
+            Some(amount) => self.account_details.available += amount,
+            None => return,
+        };
         // Add the transaction to the account's transaction list
         self.transaction_record.insert(record.tx, record);
     }
+    
     fn withdraw(&mut self, record: Record) {
         if self.account_details.locked {
             return;
         }
         // Decrease the account's available cash
-        self.account_details.available -= record.amount.unwrap();
+        match record.amount {
+            Some(amount) => self.account_details.available -= amount,
+            None => return,
+        };
         // Add the transaction to the account's transaction list
         self.transaction_record.insert(record.tx, record);
     }
     fn dispute(&mut self, record: Record) {
-        if self.account_details.locked {
+        if self.account_details.locked{
             return;
         }
         // Remove the disputed transaction from the normal transaction list, if not found
         // then assume an error has occoured and do nothing
-        let record: Record = match self.transaction_record.remove(&record.tx) {
+        let transaction: &Record = match self.transaction_record.get(&record.tx) {
             Some(record) => record,
             None => return,
         };
-        if record.frozen {
+
+        if transaction.frozen{
             return;
         }
         // Decrease the amount of cash from the available pot and add it to the held pot
-        self.account_details.available -= record.amount.unwrap();
-        self.account_details.held += record.amount.unwrap();
-        record.frozen = true;
+        match transaction.amount {
+            Some(amount) => {
+                self.account_details.available -= amount;
+                self.account_details.held += amount;
+            },
+            None => return,
+        }
+        transaction.frozen = true;
     }
     fn resolve(&mut self, record: Record) {
         if self.account_details.locked {
@@ -144,31 +157,42 @@ impl LiveAccount {
         }
         // Remove the disputed transaction from the frozen transaction list, if not found
         // then assume an error has occoured and do nothing
-        let transaction: Record = match self.transaction_record.remove(&record.tx) {
+        let transaction: &Record = match self.transaction_record.get(&record.tx) {
             Some(record) => record,
             None => return,
         };
-        if !record.frozen {
+        // If the transaction isn't frozen then this isn't a valid transaction
+        if !transaction.frozen {
             return;
         }
         transaction.frozen = false;
         // Decrease the amount of cash from the held pot and add it to the available pot
-        self.account_details.available += transaction.amount.unwrap();
-        self.account_details.held -= transaction.amount.unwrap();
+        match transaction.amount {
+            Some(amount) => {
+                self.account_details.available += amount;
+                self.account_details.held -= amount;
+            },
+            None => return,
+        }
         // Add the previously frozen transaction to the normal transaction list
     }
     fn chargeback(&mut self, record: Record) {
         // Remove the disputed transaction from the frozen transaction list, if not found
         // then assume an error has occoured and do nothing
-        let transaction_record: &Record = match self.transaction_record.get(&record.tx) {
+        let transaction: &Record = match self.transaction_record.get(&record.tx) {
             Some(record) => record,
             None => return,
         };
-        if !record.frozen {
+        if !transaction.frozen {
             return;
         }
         // Remove the amount in question from the held pot
-        self.account_details.held -= transaction_record.amount.unwrap();
+        match transaction.amount {
+            Some(amount) => {
+                self.account_details.held -= amount;
+            },
+            None => return,
+        }
         // Lock the account
         self.account_details.locked = true;
     }
